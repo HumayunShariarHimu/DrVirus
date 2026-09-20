@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "functions": {
+    "api/poll.js": { "maxDuration": 10 },
+    "api/send.js": { "maxDuration": 10, "memory": 1024 }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ]
+    }
+  ]
+}
